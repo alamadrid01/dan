@@ -2,8 +2,10 @@
 pragma solidity ^0.8.28;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "hardhat/console.sol";
 
 contract DANCore is ReentrancyGuard {
+    uint256 public constant GRANULAR_SCALAR = 1e16;
     uint256 public constant MIN_DEPOSIT = 0.5 ether;
     uint256 public constant MIN_REWARD = 0.05 ether;
     uint256 public constant MIN_WITHDRAWAL = 0.5 ether;
@@ -34,6 +36,11 @@ contract DANCore is ReentrancyGuard {
         EXHAUSTED
     }
 
+    enum CampaignType {
+        PUBLIC,
+        PRIVATE
+    }
+
     struct Quest {
         uint256 id;
         address advertiser;
@@ -56,6 +63,7 @@ contract DANCore is ReentrancyGuard {
         uint256 endedAt;
         QuestStatus status;
         bytes32 publisherKeyHash;
+        CampaignType campaignType;
     }
 
     struct UserProfile {
@@ -85,6 +93,8 @@ contract DANCore is ReentrancyGuard {
     mapping(uint256 => mapping(address => bool)) public hasCompleted;
 
     uint256 public treasuryBalance;
+
+    error NonGranularWei(string field, uint256 value, uint256 scalar);
 
     event QuestCreated(
         uint256 indexed questId,
@@ -230,9 +240,15 @@ contract DANCore is ReentrancyGuard {
         uint256 _dailyCap,
         uint256 _maxCompletions,
         uint256 _durationDays,
-        string calldata _publisherKey
+        string calldata _publisherKey,
+        CampaignType _campaignType
     ) external payable {
-        require(msg.value >= MIN_DEPOSIT, "DAN: Below minimum deposit");
+        _requireGranularWei(_rewardPerUser, "rewardPerUser");
+        _requireGranularWei(msg.value, "totalBudget(avax)");
+
+
+        require(msg.value >= MIN_DEPOSIT, "DAN: Avax passed into the contract is below minimum deposit");
+        require(_dailyCap == 0 || _dailyCap >= MIN_DEPOSIT, "DAN: Daily cap must be 0 or above minimum deposit");
         require(_rewardPerUser >= MIN_REWARD, "DAN: Reward too low");
         require(_rewardPerUser <= msg.value, "DAN: Reward exceeds budget");
         require(bytes(_appName).length > 0, "DAN: App name required");
@@ -279,7 +295,8 @@ contract DANCore is ReentrancyGuard {
             endTime: endTime,
             endedAt: 0,
             status: QuestStatus.ACTIVE,
-            publisherKeyHash: questPublisherKeyHash
+            publisherKeyHash: questPublisherKeyHash,
+            campaignType: _campaignType
         });
 
         emit QuestCreated(
@@ -540,6 +557,8 @@ contract DANCore is ReentrancyGuard {
     function topUpCampaign(
         uint256 _questId
     ) external payable questExists(_questId) {
+        _requireGranularWei(msg.value, "total budget (avax)");
+
         Quest storage quest = quests[_questId];
         require(quest.advertiser == msg.sender, "DAN: Not advertiser");
         require(
@@ -654,6 +673,15 @@ contract DANCore is ReentrancyGuard {
                 isLowerAlpha || isDigit || isDash || isUnderscore,
                 "DAN: Invalid publisher key format"
             );
+        }
+    }
+
+    function _requireGranularWei(
+        uint256 _value,
+        string memory _field
+    ) internal pure {
+        if (_value % GRANULAR_SCALAR != 0) {
+            revert NonGranularWei(_field, _value, GRANULAR_SCALAR);
         }
     }
 
